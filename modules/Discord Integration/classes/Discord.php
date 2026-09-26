@@ -41,6 +41,36 @@ class Discord {
         $added = array_filter($added);
         $removed = array_filter($removed);
 
+        // Dedicated staff roles are assigned in Discord. Forum group changes, account linking,
+        // unlinking, and Store hooks must never grant or revoke them in Discord. Keep the exact
+        // live role IDs protected even if a group-sync row is removed during reconciliation;
+        // include any future role mapped to a staff group as well.
+        $staffRoleIds = [
+            '657096201665249312' => true, // Senior Administrator
+            '665322860578996254' => true, // Administrator
+            '665323333876973589' => true, // Moderator
+            '665323124895645725' => true, // Helper
+            '665323096651333633' => true, // Architect
+            '665322713463783461' => true, // Architect
+        ];
+        $mappedStaffRoles = DB::getInstance()->query(
+            'SELECT DISTINCT CAST(gs.discord_role_id AS CHAR) AS role_id
+             FROM nl2_group_sync gs
+             JOIN nl2_groups g ON g.id = gs.website_group_id
+             WHERE g.staff = 1 AND gs.discord_role_id IS NOT NULL'
+        );
+        if ($mappedStaffRoles->error()) {
+            return false;
+        }
+        foreach ($mappedStaffRoles->results() as $mappedStaffRole) {
+            $staffRoleIds[(string) $mappedStaffRole->role_id] = true;
+        }
+        $added = array_values(array_filter($added, static fn ($role) => !isset($staffRoleIds[(string) $role])));
+        $removed = array_values(array_filter($removed, static fn ($role) => !isset($staffRoleIds[(string) $role])));
+        if (!$added && !$removed) {
+            return [];
+        }
+
         $user_discord_id = $integrationUser->data()->identifier;
         $role_changes = [];
         foreach ($added as $role) {
