@@ -54,7 +54,51 @@ class DiscordIntegration extends IntegrationBase {
 
     public function onUnlinkRequest(User $user) {
         $integrationUser = new IntegrationUser($this, $user->data()->id, 'user_id');
-        $integrationUser->unlinkIntegration();
+        if (!$integrationUser->exists()) {
+            throw new RuntimeException('Discord account is not linked.');
+        }
+
+        // Lock the linked identity before changing groups. The staff role-sync endpoint
+        // takes the same lock, so an in-flight role event cannot restore a stale badge.
+        $pdo = DB::getInstance()->getPDO();
+        if ($pdo->inTransaction() || !$pdo->beginTransaction()) {
+            throw new RuntimeException('Cannot start Discord unlink transaction.');
+        }
+        try {
+            $lockLink = $pdo->prepare(
+                'SELECT id, verified FROM nl2_users_integrations
+                 WHERE user_id = ? AND integration_id = ? FOR UPDATE'
+            );
+            if (!$lockLink || !$lockLink->execute([$user->data()->id, $this->data()->id])) {
+                throw new RuntimeException('Cannot lock Discord link for unlink.');
+            }
+            $links = $lockLink->fetchAll(PDO::FETCH_ASSOC);
+            if (count($links) !== 1 || (int) $links[0]['id'] !== (int) $integrationUser->data()->id) {
+                throw new RuntimeException('Discord link changed before unlink.');
+            }
+            if ((string) $links[0]['verified'] === '1') {
+                // Only a verified Discord link can establish these four staff groups.
+                $removeStaff = $pdo->prepare(
+                    'DELETE FROM nl2_users_groups WHERE user_id = ? AND group_id IN (8, 3, 7, 6)'
+                );
+                if (!$removeStaff || !$removeStaff->execute([$user->data()->id])) {
+                    throw new RuntimeException('Cannot remove Discord-managed forum staff groups.');
+                }
+            }
+            $integrationUser->unlinkIntegration();
+            $checkLink = $pdo->prepare(
+                'SELECT COUNT(*) FROM nl2_users_integrations WHERE user_id = ? AND integration_id = ?'
+            );
+            if (!$checkLink || !$checkLink->execute([$user->data()->id, $this->data()->id])
+                || (int) $checkLink->fetchColumn() !== 0 || !$pdo->commit()) {
+                throw new RuntimeException('Discord unlink did not commit cleanly.');
+            }
+        } catch (Throwable $error) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $error;
+        }
 
         // Remove any linked Discord roles
         $roles = array_unique(array_map(static function ($group_id) {

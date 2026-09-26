@@ -24,10 +24,43 @@ class SetDiscordRolesEndpoint extends KeyAuthEndpoint {
 
         $user = $api->getUser('id', $_POST['user']);
 
+        // This deprecated whole-role-list endpoint has no source Discord identity.
+        // It could grant a staff group from an old account's event, or remove one
+        // when the supplied list omits the role. Keep ordinary nonstaff calls.
+        $roles = $_POST['roles'] ?? [];
+        if (!is_array($roles)) {
+            $api->throwError(Nameless2API::ERROR_INVALID_POST_CONTENTS);
+        }
+        $discordStaffRoles = [
+            '665323124895645725' => true, // Helper
+            '665323333876973589' => true, // Moderator
+            '665322860578996254' => true, // Administrator
+            '657096201665249312' => true, // Senior Administrator
+        ];
+        foreach ($roles as $roleId) {
+            if (!is_string($roleId) && !is_int($roleId)) {
+                $api->throwError(Nameless2API::ERROR_INVALID_POST_CONTENTS);
+            }
+            if (isset($discordStaffRoles[(string) $roleId])) {
+                $api->throwError(Nameless2API::ERROR_NOT_AUTHORIZED,
+                    'Use identity-scoped sync-roles for Discord-managed staff.', 409);
+            }
+        }
+        $staffGroups = DB::getInstance()->getPDO()->prepare(
+            'SELECT 1 FROM nl2_users_groups WHERE user_id = ? AND group_id IN (8, 3, 7, 6) LIMIT 1'
+        );
+        if (!$staffGroups || !$staffGroups->execute([$user->data()->id])) {
+            $api->throwError(Nameless2API::ERROR_UNKNOWN_ERROR, 'Staff role guard unavailable.', 503);
+        }
+        if ($staffGroups->fetchColumn() !== false) {
+            $api->throwError(Nameless2API::ERROR_NOT_AUTHORIZED,
+                'Use identity-scoped sync-roles for Discord-managed staff.', 409);
+        }
+
         $log_array = GroupSyncManager::getInstance()->broadcastChange(
             $user,
             DiscordGroupSyncInjector::class,
-            $_POST['roles'] ?? []
+            $roles
         );
 
         if (count($log_array)) {
