@@ -32,6 +32,9 @@ class SyncDiscordRolesEndpoint extends KeyAuthEndpoint {
             if (!is_string($roleId) && !is_int($roleId)) {
                 $api->throwError(Nameless2API::ERROR_INVALID_POST_CONTENTS);
             }
+            if (!preg_match('/^[1-9][0-9]{16,19}$/D', (string) $roleId)) {
+                $api->throwError(Nameless2API::ERROR_INVALID_POST_CONTENTS);
+            }
             $changesStaff = $changesStaff || isset($discordStaffRoles[(string) $roleId]);
         }
 

@@ -41,6 +41,9 @@ class SetDiscordRolesEndpoint extends KeyAuthEndpoint {
             if (!is_string($roleId) && !is_int($roleId)) {
                 $api->throwError(Nameless2API::ERROR_INVALID_POST_CONTENTS);
             }
+            if (!preg_match('/^[1-9][0-9]{16,19}$/D', (string) $roleId)) {
+                $api->throwError(Nameless2API::ERROR_INVALID_POST_CONTENTS);
+            }
             if (isset($discordStaffRoles[(string) $roleId])) {
                 $api->throwError(Nameless2API::ERROR_NOT_AUTHORIZED,
                     'Use identity-scoped sync-roles for Discord-managed staff.', 409);
